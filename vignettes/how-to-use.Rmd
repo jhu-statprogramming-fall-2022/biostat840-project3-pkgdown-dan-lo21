@@ -1,0 +1,127 @@
+---
+title: "How to use"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{How to use}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+In this analysis, we are interested at looking at Spotify data, obtained from the TidyTuesday repository, a repository which includes a plethora of varied datasets with the purpose of utilizing them as learning tools for R. In specific, we will be looking at Latin music data from Spotify. The data itself has thousands of entries, each detailing a track, with specific features of that track, such as a popularity score, its length, what key it was written on, its valence, etc. We will be examining what songs are found in the data and looking at what these songs say about the artists that made them. Are a specific artist's songs popular? Is there an association between song popularity and its length? How has an artist's song popularity changed over time? 
+
+The TidyTuesday repository where this data was obtained:
+https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-01-21/readme.md
+
+The TidyTuesday github repository contains a data dictionary, if needed. 
+
+```{r setup}
+library(ggshadow)
+library(ggplot2)
+library(here)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(purrr)
+```
+
+```{r}
+if(!dir.exists(here('data'))){
+  dir.create(here('data'))
+}
+```
+
+```{r}
+if(!file.exists(here("data","eurovision.RDS"))){
+  spotify_songs <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-21/spotify_songs.csv')
+  
+  # save the files to RDS objects
+  saveRDS(spotify_songs, file = here("data","spotify.RDS"))
+}
+```
+
+```{r}
+spotify <- readRDS(here("data","spotify.RDS"))
+```
+
+```{r}
+latin_playlists <- unique(spotify['playlist_name'])[str_detect(unique(spotify$playlist_name), c("Latin|latin|Chicano|LATIN")),]$playlist_name
+```
+
+```{r}
+latin_songs <- spotify %>% filter(playlist_name %in% latin_playlists)  %>% select(-c('playlist_name', 'playlist_id', 'playlist_genre', 'playlist_subgenre')) %>% mutate(duration_m=(duration_ms / 60000))
+latin_songs <- latin_songs[str_detect(latin_songs$track_album_release_date,"[0-9]{4}-[0-9]{2}-[0-9]{2}"),] %>% mutate(track_album_release_date=ymd(track_album_release_date))
+latin_songs <- latin_songs[!duplicated(latin_songs),]
+```
+
+```{r}
+latin_songs[order(-latin_songs$track_popularity),] %>% ggplot(aes(track_popularity)) + geom_bar() + labs(x='Track Popularity Score', y='Count', title='Number of Latin Tracks per Popularity Score', subtitle = 'A large proportion of songs have a 0 popularity score. This means that the playlists included in the \ndataset, some which were user created, contained songs which were not mainstream.')
+```
+
+```{r}
+latin_songs[order(-latin_songs$track_popularity),][1:500,] %>% ggplot(aes(x=duration_m, y=track_popularity)) + geom_glowpoint(color='orange') + 
+  guides(color='none') + theme(plot.background = element_rect(fill = "#88AED0"), panel.background = element_rect(fill = "#190132")) + labs(x='Track Duration (minutes)', y='Track Popularity Score', title='Track Popularity per Duration in minutes', subtitle = 'There seems to be no correlation between track popularity and track duration for the 500 tracks \nwith top popularity score. Most tracks seem to be in between 3 and 4 minutes long.') 
+```
+
+```{r}
+top_artists <- latin_songs %>% group_by(track_artist) %>% summarise(n=n(), latest=max(track_album_release_date), longest = min(track_album_release_date), mean_duration_m = mean(duration_m), mean_popularity = mean(track_popularity))
+top_artists <- top_artists[order(-top_artists$mean_popularity),] %>% filter(n >= 10, mean_popularity>0) %>% head(6)
+top_artists
+```
+
+```{r}
+top_artist_list <- top_artists$track_artist
+```
+
+```{r}
+latin_songs %>% filter(track_artist %in% top_artist_list, track_popularity > 0, track_album_release_date > '2007-01-01') %>% select(track_artist, track_popularity, track_album_release_date) %>% group_by(track_artist, track_album_release_date) %>% summarize(track_popularity=mean(track_popularity)) %>% ggplot(aes(x=track_album_release_date, y=track_popularity, color=track_artist))  + geom_glowline() + theme(plot.background = element_rect(fill = "#88AED0"), panel.background = element_rect(fill = "#190132")) + labs(x = 'Track Album Release Date', y='Track Popularity Score', title='Track Popularity Score for 6 Most Popular Artists', subtitle = 'Some artist such as Daddy Yankee and Shakira have had tracks with fairly high popularity scores. \nOn the other hand, the other artists have had tracks with high track popularity scores, as well as \nlow scores.', color='Track Artists')
+```
+
+```{r}
+popularity <- latin_songs %>% filter(track_popularity>0) %>% group_by(track_artist) %>% summarize(mean_popularity = mean(track_popularity), n=n()) %>% filter(n>=10, mean_popularity>50)
+popular_names <- popularity[order(-popularity$mean_popularity),] %>% head(9)
+latin_songs %>% filter(track_artist %in% popular_names$track_artist) %>% select(track_artist, track_popularity, valence) %>% ggplot(aes(x=track_popularity, y=valence, color=track_artist)) + facet_wrap(~track_artist) + geom_point() + labs(x='Track Popularity', y='Track Valence', title='Track Valence vs Track Popularity per Artist', subtitle = "there doesn't seem to be any correlation between track valence and track popularity. Some artists \nhave high popularity for each track regardless of valence, such as Shakira and J Balvin.", color='Track Artist')
+
+```
+
+```{r}
+top_latin <- latin_songs %>% filter(track_artist %in% popular_names$track_artist)
+latin_mode <- top_latin |> split(top_latin$mode)
+latin_mode |> map(.f = ~mean(.x$valence))
+```
+
+From performing this analysis, we learned that a large number of latin tracks in the database have a popularity score of 0. This means that spotify and its users choose to put largely unpopular or unknown songs in their playlists. We also learned that there is no correlation between track length and its popularity score. We looked at the most popular artists and found that although some have released popular tracks throughout the years, such as illustrious Shakira, others have vacillated in this regard. We learned that valence is not correlated with a song's popularity, as is seen with the 9 most popular artists. Finally, we learned that the mode of a song, whether it was written in a minor or major key, is not related to valence either.   
+
+Functions used:
+
+dplyr:
+- group_by()
+- summarize()
+- filter()
+- select()
+- order()
+- mutate()
+
+stringr:
+- str_detect()
+
+lubridate:
+- ymd()
+
+ggshadow:
+- geom_glowpoint()
+- geom_glowline()
+
+purr:
+- split()
+- map()
+
+
+
+
